@@ -1678,49 +1678,53 @@ class Segment34View extends WatchUi.WatchFace {
 
     hidden function storeWeatherData() as Void {
         var cc = Weather.getCurrentConditions();
-        var cc_data = {};
-        if(cc != null) {
-            cc_data["timestamp"] = Time.now().value();
-            if(cc.observationLocationPosition != null) {
-                cc_data["observationLocationPosition"] = cc.observationLocationPosition.toDegrees();
-            }
-            if(cc.condition != null) { cc_data["condition"] = cc.condition; }
-            if(cc.highTemperature != null) { cc_data["highTemperature"] = cc.highTemperature; }
-            if(cc.lowTemperature != null) { cc_data["lowTemperature"] = cc.lowTemperature; }
-            if(cc.precipitationChance != null) { cc_data["precipitationChance"] = cc.precipitationChance; }
-            if(cc.relativeHumidity != null) { cc_data["relativeHumidity"] = cc.relativeHumidity; }
-            if(cc.temperature != null) { cc_data["temperature"] = cc.temperature; }
-            if(cc.feelsLikeTemperature != null) { cc_data["feelsLikeTemperature"] = cc.feelsLikeTemperature; }
-            if(cc.windBearing != null) { cc_data["windBearing"] = cc.windBearing; }
-            if(cc.windSpeed != null) { cc_data["windSpeed"] = cc.windSpeed; }
-            if(cc has :uvIndex and cc.uvIndex != null) { cc_data["uvIndex"] = cc.uvIndex; }
-        }
-        Application.Storage.setValue("current_conditions", cc_data);
-        cc_data = null;
-        cc = null; 
+        
+        if (cc != null) {
+            // Use a fixed-size array. 0 allocations during fill.
+            var cc_data = new [CC_MAX_SIZE];
+            cc_data[IDX_TIME]   = Time.now().value();
+            cc_data[IDX_COND]   = cc.condition;
+            cc_data[IDX_TEMP]   = cc.temperature;
+            cc_data[IDX_PRECIP] = cc.precipitationChance;
+            cc_data[IDX_WIND_B] = cc.windBearing;
+            cc_data[IDX_WIND_S] = cc.windSpeed;
+            cc_data[IDX_UV]     = (cc has :uvIndex) ? cc.uvIndex : null;
 
-        if(System.getSystemStats().freeMemory > 15000) {
-            var hf = Weather.getHourlyForecast();
-            var hf_data = [];
-            var tmp = {};
-            if(hf != null) {
-                for(var i=0; i<hf.size(); i++) {
-                    tmp = {
-                        "forecastTime" => hf[i].forecastTime.value(),
-                        "condition" => hf[i].condition,
-                        "precipitationChance" => hf[i].precipitationChance,
-                        "temperature" => hf[i].temperature,
-                        "windBearing" => hf[i].windBearing,
-                        "windSpeed" => hf[i].windSpeed
-                    };
-                    if(hf[i] has :uvIndex) { tmp["uvIndex"] = hf[i].uvIndex; }
-                    hf_data.add(tmp);
-                }
-            }
-            Application.Storage.setValue("hourly_forecast", hf_data);
-        } else {
-            Application.Storage.setValue("hourly_forecast", []);
+            Application.Storage.setValue("current_conditions", cc_data);
         }
+
+        // Hourly Forecast: The real performance killer
+        var stats = System.getSystemStats();
+        if (stats.freeMemory > 15000) {
+            var hf = Weather.getHourlyForecast();
+            if (hf != null) {
+                var hf_size = hf.size();
+                // Pre-allocate the outer array size!
+                var hf_data = new [hf_size]; 
+                
+                // Check once, not in the loop
+                var hasUV = (hf_size > 0 && hf[0] has :uvIndex);
+
+                for (var i = 0; i < hf_size; i++) {
+                    var item = hf[i];
+                    // Flatten each forecast entry into a small array
+                    hf_data[i] = [
+                        item.forecastTime.value(),
+                        item.condition,
+                        item.temperature,
+                        item.precipitationChance,
+                        item.windBearing,
+                        item.windSpeed,
+                        hasUV ? item.uvIndex : null
+                    ];
+                }
+                Application.Storage.setValue("hourly_forecast", hf_data);
+                return; // Exit early
+            }
+        }
+        
+        // Clear storage only if we didn't write new data
+        Application.Storage.setValue("hourly_forecast", null);
     }
 
     hidden function readWeatherData() as StoredWeather {
