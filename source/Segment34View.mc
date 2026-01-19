@@ -1660,67 +1660,51 @@ class Segment34View extends WatchUi.WatchFace {
         
     }
 
-    // Use Enums to index your arrays. Symbols cost almost nothing.
-    enum {
-        IDX_TIME,
-        IDX_COND,
-        IDX_TEMP,
-        IDX_PRECIP,
-        IDX_WIND_B,
-        IDX_WIND_S,
-        IDX_UV,
-        CC_MAX_SIZE // 7
-    }
-
     hidden function storeWeatherData() as Void {
         var cc = Weather.getCurrentConditions();
-        
-        if (cc != null) {
-            // Use a fixed-size array. 0 allocations during fill.
-            var cc_data = new [CC_MAX_SIZE];
-            cc_data[IDX_TIME]   = Time.now().value();
-            cc_data[IDX_COND]   = cc.condition;
-            cc_data[IDX_TEMP]   = cc.temperature;
-            cc_data[IDX_PRECIP] = cc.precipitationChance;
-            cc_data[IDX_WIND_B] = cc.windBearing;
-            cc_data[IDX_WIND_S] = cc.windSpeed;
-            cc_data[IDX_UV]     = (cc has :uvIndex) ? cc.uvIndex : null;
-
-            Application.Storage.setValue("cc_v2", cc_data);
-        }
-
-        // Hourly Forecast: The real performance killer
-        var stats = System.getSystemStats();
-        if (stats.freeMemory > 15000) {
-            var hf = Weather.getHourlyForecast();
-            if (hf != null) {
-                var hf_size = hf.size();
-                // Pre-allocate the outer array size!
-                var hf_data = new [hf_size]; 
-                
-                // Check once, not in the loop
-                var hasUV = (hf_size > 0 && hf[0] has :uvIndex);
-
-                for (var i = 0; i < hf_size; i++) {
-                    var item = hf[i];
-                    // Flatten each forecast entry into a small array
-                    hf_data[i] = [
-                        item.forecastTime.value(),
-                        item.condition,
-                        item.temperature,
-                        item.precipitationChance,
-                        item.windBearing,
-                        item.windSpeed,
-                        hasUV ? item.uvIndex : null
-                    ];
-                }
-                Application.Storage.setValue("hf_v2", hf_data);
-                return; // Exit early
+        var cc_data = {};
+        if(cc != null) {
+            cc_data["timestamp"] = Time.now().value();
+            if(cc.observationLocationPosition != null) {
+                cc_data["observationLocationPosition"] = cc.observationLocationPosition.toDegrees();
             }
+            if(cc.condition != null) { cc_data["condition"] = cc.condition; }
+            if(cc.highTemperature != null) { cc_data["highTemperature"] = cc.highTemperature; }
+            if(cc.lowTemperature != null) { cc_data["lowTemperature"] = cc.lowTemperature; }
+            if(cc.precipitationChance != null) { cc_data["precipitationChance"] = cc.precipitationChance; }
+            if(cc.relativeHumidity != null) { cc_data["relativeHumidity"] = cc.relativeHumidity; }
+            if(cc.temperature != null) { cc_data["temperature"] = cc.temperature; }
+            if(cc.feelsLikeTemperature != null) { cc_data["feelsLikeTemperature"] = cc.feelsLikeTemperature; }
+            if(cc.windBearing != null) { cc_data["windBearing"] = cc.windBearing; }
+            if(cc.windSpeed != null) { cc_data["windSpeed"] = cc.windSpeed; }
+            if(cc has :uvIndex and cc.uvIndex != null) { cc_data["uvIndex"] = cc.uvIndex; }
         }
-        
-        // Clear storage only if we didn't write new data
-        Application.Storage.setValue("hf_v2", null);
+        Application.Storage.setValue("current_conditions", cc_data);
+        cc_data = null;
+        cc = null; 
+
+        if(System.getSystemStats().freeMemory > 15000) {
+            var hf = Weather.getHourlyForecast();
+            var hf_data = [];
+            var tmp = {};
+            if(hf != null) {
+                for(var i=0; i<hf.size(); i++) {
+                    tmp = {
+                        "forecastTime" => hf[i].forecastTime.value(),
+                        "condition" => hf[i].condition,
+                        "precipitationChance" => hf[i].precipitationChance,
+                        "temperature" => hf[i].temperature,
+                        "windBearing" => hf[i].windBearing,
+                        "windSpeed" => hf[i].windSpeed
+                    };
+                    if(hf[i] has :uvIndex) { tmp["uvIndex"] = hf[i].uvIndex; }
+                    hf_data.add(tmp);
+                }
+            }
+            Application.Storage.setValue("hourly_forecast", hf_data);
+        } else {
+            Application.Storage.setValue("hourly_forecast", []);
+        }
     }
 
     hidden function readWeatherData() as StoredWeather {
@@ -2686,59 +2670,45 @@ class Segment34View extends WatchUi.WatchFace {
         }
     }
 
+    // Define this at the class level or as a constant to save memory
+    private const BEAUFORT_THRESHOLDS = [0.5, 1.5, 3.3, 5.5, 7.9, 10.7, 13.8, 17.1, 20.7, 24.4, 28.4, 32.6];
+
     hidden function getWind() as String {
-        var windspeed = "";
-        var bearing = "";
+        // 1. Early exit - avoid nesting
+        if (weatherCondition == null || weatherCondition.windSpeed == null) {
+            return "";
+        }
 
-        if(weatherCondition != null and weatherCondition.windSpeed != null) {
-            var windspeed_mps = weatherCondition.windSpeed;
-            if(propWindUnit == 0) { // m/s
-                windspeed = Math.round(windspeed_mps).format("%01d");
-            } else if (propWindUnit == 1) { // km/h
-                var windspeed_kmh = Math.round(windspeed_mps * 3.6);
-                windspeed = windspeed_kmh.format("%01d");
-            } else if (propWindUnit == 2) { // mph
-                var windspeed_mph = Math.round(windspeed_mps * 2.237);
-                windspeed = windspeed_mph.format("%01d");
-            } else if (propWindUnit == 3) { // knots
-                var windspeed_kt = Math.round(windspeed_mps * 1.944);
-                windspeed = windspeed_kt.format("%01d");
-            } else if(propWindUnit == 4) { // beufort
-                if (windspeed_mps < 0.5f) {
-                    windspeed = "0";  // Calm
-                } else if (windspeed_mps < 1.5f) {
-                    windspeed = "1";  // Light air
-                } else if (windspeed_mps < 3.3f) {
-                    windspeed = "2";  // Light breeze
-                } else if (windspeed_mps < 5.5f) {
-                    windspeed = "3";  // Gentle breeze
-                } else if (windspeed_mps < 7.9f) {
-                    windspeed = "4";  // Moderate breeze
-                } else if (windspeed_mps < 10.7f) {
-                    windspeed = "5";  // Fresh breeze
-                } else if (windspeed_mps < 13.8f) {
-                    windspeed = "6";  // Strong breeze
-                } else if (windspeed_mps < 17.1f) {
-                    windspeed = "7";  // Near gale
-                } else if (windspeed_mps < 20.7f) {
-                    windspeed = "8";  // Gale
-                } else if (windspeed_mps < 24.4f) {
-                    windspeed = "9";  // Strong gale
-                } else if (windspeed_mps < 28.4f) {
-                    windspeed = "10";  // Storm
-                } else if (windspeed_mps < 32.6f) {
-                    windspeed = "11";  // Violent storm
-                } else {
-                    windspeed = "12";  // Hurricane force
+        var mps = weatherCondition.windSpeed;
+        var val = 0;
+
+        // 2. Use a Switch for Units - cleaner bytecode than if-else
+        switch (propWindUnit) {
+            case 0: val = mps; break;
+            case 1: val = mps * 3.6; break;
+            case 2: val = mps * 2.237; break;
+            case 3: val = mps * 1.944; break;
+            case 4: // Beaufort
+                val = 12; // Default to Hurricane
+                for (var i = 0; i < 12; i++) {
+                    if (mps < BEAUFORT_THRESHOLDS[i]) {
+                        val = i;
+                        break;
+                    }
                 }
-            }
+                break;
         }
 
-        if(weatherCondition != null and weatherCondition.windBearing != null) {
-            bearing = ((Math.round((weatherCondition.windBearing.toFloat() + 180) / 45.0).toNumber() % 8) + 97).toChar().toString();
+        // 3. Compact Bearing Logic
+        var bStr = "";
+        if (weatherCondition.windBearing != null) {
+            // Use integer math for the index: (bearing + 22.5) / 45
+            var idx = ((weatherCondition.windBearing.toNumber() + 22) / 45) % 8;
+            bStr = (idx + 97).toChar();
         }
 
-        return bearing + windspeed;
+        // 4. Single allocation format
+        return Lang.format("$1$$2$", [bStr, val.format("%d")]);
     }
 
     hidden function getFeelsLike() as String {
