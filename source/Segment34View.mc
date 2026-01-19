@@ -155,6 +155,22 @@ class Segment34View extends WatchUi.WatchFace {
         lowBatt
     }
 
+    enum {
+        IDX_TIME,
+        IDX_COND,
+        IDX_TEMP,
+        IDX_PRECIP,
+        IDX_WIND_B,
+        IDX_WIND_S,
+        IDX_UV,
+        CC_MAX_SIZE,
+        IDX_POS,
+        IDX_HIGH,
+        IDX_LOW,
+        IDX_HUMIDITY,
+        IDX_FEELS
+    }
+
     var clockBgText = "#####";
 
     (:Round240) const bottomFieldWidths = [3, 3, 3, 0];
@@ -1710,35 +1726,50 @@ class Segment34View extends WatchUi.WatchFace {
     hidden function readWeatherData() as StoredWeather {
         var ret = new StoredWeather();
         var now = Time.now().value();
-        var cc_data = Application.Storage.getValue("current_conditions") as Dictionary<String, Application.PropertyValueType>?;
-        if(cc_data == null) { return ret; }
         
-        var data_age_s = now - (cc_data.get("timestamp") as Number);
-        var pos = cc_data.get("observationLocationPosition") as Array;
-        ret.observationLocationPosition = new Position.Location({:latitude => pos[0], :longitude => pos[1], :format => :degrees});
-        if(data_age_s > 0 and data_age_s < 3600) {
-            ret.condition = cc_data.get("condition") as Number;
-            ret.highTemperature = cc_data.get("highTemperature") as Number;
-            ret.lowTemperature = cc_data.get("lowTemperature") as Number;
-            ret.precipitationChance = cc_data.get("precipitationChance") as Number;
-            ret.relativeHumidity = cc_data.get("relativeHumidity") as Number;
-            ret.temperature = cc_data.get("temperature") as Number;
-            ret.feelsLikeTemperature = cc_data.get("feelsLikeTemperature") as Float;
-            ret.windBearing = cc_data.get("windBearing") as Number;
-            ret.windSpeed = cc_data.get("windSpeed") as Float;
-            ret.uvIndex = cc_data.get("uvIndex") as Float;
+        var cc_data = Application.Storage.getValue("current_conditions") as Array?;
+        if (cc_data == null) { return ret; }
+
+        var data_age_s = now - cc_data[IDX_TIME];
+        
+        // Direct index access - significantly faster than .get()
+        var pos = cc_data[IDX_POS];
+        if (pos != null) {
+            ret.observationLocationPosition = new Position.Location({
+                :latitude => pos[0], 
+                :longitude => pos[1], 
+                :format => :degrees
+            });
+        }
+
+        if (data_age_s >= 0 && data_age_s < 3600) {
+            ret.condition           = cc_data[IDX_COND];
+            ret.highTemperature      = cc_data[IDX_HIGH];
+            ret.lowTemperature       = cc_data[IDX_LOW];
+            ret.precipitationChance  = cc_data[IDX_PRECIP];
+            ret.relativeHumidity     = cc_data[IDX_HUMIDITY];
+            ret.temperature          = cc_data[IDX_TEMP];
+            ret.feelsLikeTemperature = cc_data[IDX_FEELS];
+            ret.windBearing          = cc_data[IDX_WIND_B];
+            ret.windSpeed            = cc_data[IDX_WIND_S];
+            ret.uvIndex              = cc_data[IDX_UV];
         } else {
-            var hf_data = Application.Storage.getValue("hourly_forecast") as Array?;
-            if(hf_data == null) { return ret; }
-            for(var i=0; i<hf_data.size(); i++) {
-                var forecast_age = now - (hf_data[i].get("forecastTime") as Number);
-                if(forecast_age > 0 and forecast_age < 3600) {
-                    ret.condition = hf_data[i].get("condition") as Number;
-                    ret.temperature = hf_data[i].get("temperature") as Number;
-                    ret.precipitationChance = hf_data[i].get("precipitationChance") as Number;
-                    ret.windBearing = hf_data[i].get("windBearing") as Number;
-                    ret.windSpeed = hf_data[i].get("windSpeed") as Float;
-                    ret.uvIndex = cc_data.get("uvIndex") as Float;
+            var hf_data = Application.Storage.getValue("hourly_forecast") as Array<Array>?;
+            if (hf_data == null) { return ret; }
+            
+            var hf_size = hf_data.size();
+            for (var i = 0; i < hf_size; i++) {
+                var forecast = hf_data[i];
+                var forecast_age = now - forecast[IDX_TIME];
+                
+                if (forecast_age >= 0 && forecast_age < 3600) {
+                    ret.condition           = forecast[IDX_COND];
+                    ret.temperature          = forecast[IDX_TEMP];
+                    ret.precipitationChance  = forecast[IDX_PRECIP];
+                    ret.windBearing          = forecast[IDX_WIND_B];
+                    ret.windSpeed            = forecast[IDX_WIND_S];
+                    ret.uvIndex              = forecast[IDX_UV];
+                    break; // Exit early once we find the valid hour
                 }
             }
         }
@@ -2670,11 +2701,9 @@ class Segment34View extends WatchUi.WatchFace {
         }
     }
 
-    // Define this at the class level or as a constant to save memory
     private const BEAUFORT_THRESHOLDS = [0.5, 1.5, 3.3, 5.5, 7.9, 10.7, 13.8, 17.1, 20.7, 24.4, 28.4, 32.6];
 
     hidden function getWind() as String {
-        // 1. Early exit - avoid nesting
         if (weatherCondition == null || weatherCondition.windSpeed == null) {
             return "";
         }
@@ -2682,7 +2711,6 @@ class Segment34View extends WatchUi.WatchFace {
         var mps = weatherCondition.windSpeed;
         var val = 0;
 
-        // 2. Use a Switch for Units - cleaner bytecode than if-else
         switch (propWindUnit) {
             case 0: val = mps; break;
             case 1: val = mps * 3.6; break;
@@ -2699,15 +2727,13 @@ class Segment34View extends WatchUi.WatchFace {
                 break;
         }
 
-        // 3. Compact Bearing Logic
         var bStr = "";
         if (weatherCondition.windBearing != null) {
-            // Use integer math for the index: (bearing + 22.5) / 45
             var idx = ((weatherCondition.windBearing.toNumber() + 22) / 45) % 8;
             bStr = (idx + 97).toChar();
         }
 
-        // 4. Single allocation format
+        // Single allocation format
         return Lang.format("$1$$2$", [bStr, val.format("%d")]);
     }
 
