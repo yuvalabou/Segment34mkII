@@ -139,6 +139,8 @@ class Segment34View extends WatchUi.WatchFace {
     hidden var strLabelBottomRight as String = "";
     hidden var strLabelBottomFourth as String = "";
 
+    hidden var activeComplications as Array<Complications.Complication?> = new [75];
+
     enum colorNames {
         bg = 0,
         clock,
@@ -204,6 +206,7 @@ class Segment34View extends WatchUi.WatchFace {
         hasComplications = Toybox has :Complications;
         
         calculateLayout();
+        updateActiveComplications();
 
         updateWeather();
     }
@@ -1069,6 +1072,72 @@ class Segment34View extends WatchUi.WatchFace {
         } 
     }
 
+    hidden function updateActiveComplications() as Void {
+        activeComplications = new [75];
+        
+        if (!hasComplications) { return; }
+
+        var settingsToCheck = [
+            propLeftValueShows, propMiddleValueShows, propRightValueShows, propFourthValueShows,
+            propBottomFieldShows, propTopPartShows, propSunriseFieldShows, propSunsetFieldShows,
+            propAodFieldShows, propAodRightFieldShows
+        ];
+
+        for (var i = 0; i < settingsToCheck.size(); i++) {
+            var internalId = settingsToCheck[i];
+            
+            if (internalId >= 0 && internalId < activeComplications.size()) {
+                
+                if (activeComplications[internalId] == null) {
+                    var nativeType = getNativeComplicationType(internalId);
+                    
+                    if (nativeType != null) {
+                        try {
+                            var compId = new Complications.Id(nativeType as Complications.Type);
+                            activeComplications[internalId] = Complications.getComplication(compId);
+                        } catch (e) {
+                            // Not supported on this device, so null
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    hidden function getNativeComplicationType(internalId as Number) as Number? {
+        switch (internalId) {
+            case 0: return Complications.COMPLICATION_TYPE_INTENSITY_MINUTES; // Weekly
+            case 4: return Complications.COMPLICATION_TYPE_FLOORS_CLIMBED;
+            case 6: return Complications.COMPLICATION_TYPE_RECOVERY_TIME;
+            case 7: return Complications.COMPLICATION_TYPE_VO2MAX_RUN;
+            case 8: return Complications.COMPLICATION_TYPE_VO2MAX_BIKE;
+            case 9: return Complications.COMPLICATION_TYPE_RESPIRATION_RATE;
+            case 10: return Complications.COMPLICATION_TYPE_HEART_RATE;
+            case 11: return Complications.COMPLICATION_TYPE_CALORIES;
+            case 12: return Complications.COMPLICATION_TYPE_ALTITUDE; // Meters
+            case 13: return Complications.COMPLICATION_TYPE_STRESS;
+            case 14: return Complications.COMPLICATION_TYPE_BODY_BATTERY;
+            case 15: return Complications.COMPLICATION_TYPE_ALTITUDE; // Feet
+            case 17: return Complications.COMPLICATION_TYPE_STEPS;
+            case 19: return Complications.COMPLICATION_TYPE_WHEELCHAIR_PUSHES;
+            case 21: return Complications.COMPLICATION_TYPE_WEEKLY_RUN_DISTANCE; // km
+            case 22: return Complications.COMPLICATION_TYPE_WEEKLY_RUN_DISTANCE; // mi
+            case 23: return Complications.COMPLICATION_TYPE_WEEKLY_BIKE_DISTANCE; // km
+            case 24: return Complications.COMPLICATION_TYPE_WEEKLY_BIKE_DISTANCE; // mi
+            case 25: return Complications.COMPLICATION_TYPE_TRAINING_STATUS;
+            case 30: return Complications.COMPLICATION_TYPE_SEA_LEVEL_PRESSURE;
+            case 34: return Complications.COMPLICATION_TYPE_BATTERY;
+            case 36: return Complications.COMPLICATION_TYPE_NOTIFICATION_COUNT;
+            case 37: return Complications.COMPLICATION_TYPE_SOLAR_INPUT;
+            case 39: return Complications.COMPLICATION_TYPE_SUNRISE;
+            case 40: return Complications.COMPLICATION_TYPE_SUNSET;
+            case 53: return Complications.COMPLICATION_TYPE_CURRENT_TEMPERATURE;
+            case 57: return Complications.COMPLICATION_TYPE_CALENDAR_EVENTS;
+            case 59: return Complications.COMPLICATION_TYPE_PULSE_OX;
+            default: return null;
+        }
+    }
+
     hidden function drawDataField(dc as Dc, x as Number, y as Number, adjX as Number, label as String?, value as String, width as Number, font as FontResource, bgwidth as Number) as Number {
         if(value.equals("") and (label == null or label.equals(""))) { return 0; }
         if(width == 0) { return 0; }
@@ -1844,6 +1913,85 @@ class Segment34View extends WatchUi.WatchFace {
         var val = "";
         var numberFormat = "%d";
 
+        if (complicationType >= 0 && complicationType < activeComplications.size()) {
+            var comp = activeComplications[complicationType];
+            
+            if (comp != null && comp.value != null) {
+                
+                if (complicationType == 10) { // HR
+                   return comp.value.format("%01d");
+                } 
+                else if (complicationType == 6) { // Recovery Time (Native is Minutes -> convert to Hours)
+                   var recovery_h = comp.value / 60.0;
+                   if(recovery_h < 9.9 and recovery_h != 0) { 
+                       return recovery_h.format("%.1f"); 
+                   } else { 
+                       return Math.round(recovery_h).format(numberFormat);
+                   }
+                }
+                else if (complicationType == 25) { // Training Status
+                    return comp.value.toUpper();
+                }
+                else if (complicationType == 57) { // Calendar Events
+                    val = comp.value;
+                    var colon_index = val.find(":");
+                    if (colon_index != null && colon_index < 2) { val = "0" + val; }
+                    if (width < 5 and colon_index != null) {
+                         return val.substring(0, 2) + val.substring(3, 5);
+                    }
+                    return val;
+                }
+                else if (complicationType == 12) { // Altitude m
+                    return comp.value.format(numberFormat);
+                }
+                else if (complicationType == 15) { // Altitude ft
+                    return (comp.value * 3.28084).format(numberFormat);
+                }
+                else if (complicationType == 30) { // Sea Level Pressure (Native is Pascals -> convert to hPa)
+                    return formatPressure(comp.value / 100.0, width);
+                }
+                else if (complicationType == 21 || complicationType == 23) { // Weekly Dist km (Native is meters)
+                    return formatDistanceByWidth(comp.value * 0.001, width);
+                }
+                else if (complicationType == 22 || complicationType == 24) { // Weekly Dist mi (Native is meters)
+                    return formatDistanceByWidth(comp.value * 0.000621371, width);
+                }
+                else if (complicationType == 39 || complicationType == 40) { // Sunrise/Sunset (Native is Seconds from Midnight)
+                    var sec = comp.value;
+                    if (sec != null) {
+                        var h = sec / 3600;
+                        var m = (sec % 3600) / 60;
+                        h = formatHour(h); // Use your existing 12/24h logic
+                        if(width < 5) {
+                            return h.format("%02d") + m.format("%02d");
+                        } else {
+                            return h.format("%02d") + ":" + m.format("%02d");
+                        }
+                    }
+                }
+                else if (complicationType == 17) { // Steps special formatting
+                    if(width >= 5) {
+                        return comp.value.format(numberFormat);
+                    } else {
+                        var steps_k = comp.value / 1000.0;
+                        if(steps_k < 10 and width == 4) {
+                            return steps_k.format("%.1f") + "K";
+                        } else {
+                            return steps_k.format("%d") + "K";
+                        }
+                    }
+                }
+                else if (complicationType == 53) { // Temperature (Native is Celsius)
+                    var t_unit = getTempUnit();
+                    // formatTemperature helper handles C/F conversion
+                    return formatTemperature(comp.value, t_unit).format("%01d") + t_unit;
+                }
+                
+                return comp.value.toString();
+            }
+        }
+
+
         if(complicationType == -2) { // Hidden
             return "";
         } else if(complicationType == -1) { // Date
@@ -1887,22 +2035,11 @@ class Segment34View extends WatchUi.WatchFace {
                 }
             }
         } else if(complicationType == 6) { // Time to Recovery (h)
-            if (hasComplications) {
-                try {
-                    var complication = Complications.getComplication(new Id(Complications.COMPLICATION_TYPE_RECOVERY_TIME));
-                    if (complication != null && complication.value != null) {
-                        var recovery_h = complication.value / 60.0;
-                        if(recovery_h < 9.9 and recovery_h != 0) { val = recovery_h.format("%.1f"); } else { val = Math.round(recovery_h).format(numberFormat); }
-                    }
-                } catch(e) {}
-            } else {
-                if(ActivityMonitor.getInfo() has :timeToRecovery) {
-                    if(ActivityMonitor.getInfo().timeToRecovery != null) {
-                        val = ActivityMonitor.getInfo().timeToRecovery.format(numberFormat);
-                    }
+            if(ActivityMonitor.getInfo() has :timeToRecovery) {
+                if(ActivityMonitor.getInfo().timeToRecovery != null) {
+                     val = ActivityMonitor.getInfo().timeToRecovery.format(numberFormat);
                 }
             }
-            
         } else if(complicationType == 7) { // VO2 Max Running
             var profile = UserProfile.getProfile();
             if(profile has :vo2maxRunning) {
@@ -1924,15 +2061,13 @@ class Segment34View extends WatchUi.WatchFace {
                     val = resp_rate.format(numberFormat);
                 }
             }
-        } else if(complicationType == 10) {
-            // Try to retrieve live HR from Activity::Info
+        } else if(complicationType == 10) { // HR
             var activity_info = Activity.getActivityInfo();
             var sample = activity_info.currentHeartRate;
             if(sample != null) {
                 val = sample.format("%01d");
             } else if (ActivityMonitor has :getHeartRateHistory) {
-                // Falling back to historical HR from ActivityMonitor
-                var history = ActivityMonitor.getHeartRateHistory(1, /* newestFirst */ true);
+                var history = ActivityMonitor.getHeartRateHistory(1, true);
                 if (history != null) {
                     var hist = history.next();
                     if ((hist != null) && (hist.heartRate != ActivityMonitor.INVALID_HR_SAMPLE)) {
@@ -1950,9 +2085,9 @@ class Segment34View extends WatchUi.WatchFace {
                 var alt = getAltitudeValue();
                 if (alt != null) {
                     val = alt.format(numberFormat);
-            }
+                }
         } else if(complicationType == 13) { // Stress
-        var st = getStressData();
+            var st = getStressData();
             if(st != null) {
                 val = st.format(numberFormat);
             }
@@ -1980,7 +2115,6 @@ class Segment34View extends WatchUi.WatchFace {
                         val = steps_k.format("%d") + "K";
                     }
                 }
-                
             }
         } else if(complicationType == 18) { // Distance (m) / day
             if(ActivityMonitor.getInfo().distance != null) {
@@ -2003,16 +2137,7 @@ class Segment34View extends WatchUi.WatchFace {
         } else if(complicationType == 24) { // Weekly bike distance (miles)
             val = getWeeklyDistanceFromComplication(Complications.COMPLICATION_TYPE_WEEKLY_BIKE_DISTANCE, 0.000621371, width);
         } else if(complicationType == 25) { // Training status
-            if (hasComplications) {
-                try {
-                    var complication = Complications.getComplication(new Id(Complications.COMPLICATION_TYPE_TRAINING_STATUS));
-                    if (complication != null && complication.value != null) {
-                        val = complication.value.toUpper();
-                    }
-                } catch(e) {
-                    // Complication not found
-                }
-            }
+             // Handled by cache
         } else if(complicationType == 26) { // Raw Barometric pressure (hPA)
             var info = Activity.getActivityInfo();
             if (info has :rawAmbientPressure && info.rawAmbientPressure != null) {
@@ -2039,7 +2164,6 @@ class Segment34View extends WatchUi.WatchFace {
             }
         } else if(complicationType == 29) { // Act Calories
             var rest_calories = getRestCalories();
-            // Get total calories and subtract rest calories
             if (ActivityMonitor.getInfo() has :calories && ActivityMonitor.getInfo().calories != null && rest_calories > 0) {
                 var active_calories = ActivityMonitor.getInfo().calories - rest_calories;
                 if (active_calories > 0) {
@@ -2056,10 +2180,10 @@ class Segment34View extends WatchUi.WatchFace {
             var week_number = isoWeekNumber(today.year, today.month, today.day);
             val = week_number.format(numberFormat);
         } else if(complicationType == 32) { // Weekly distance (km)
-            var weekly_distance = getWeeklyDistance() / 100000.0;  // Convert to km
+            var weekly_distance = getWeeklyDistance() / 100000.0; // Convert to km
             val = formatDistanceByWidth(weekly_distance, width);
         } else if(complicationType == 33) { // Weekly distance (miles)
-            var weekly_distance = getWeeklyDistance() * 0.00000621371;  // Convert to miles
+            var weekly_distance = getWeeklyDistance() * 0.00000621371; // Convert to miles
             val = formatDistanceByWidth(weekly_distance, width);
         } else if(complicationType == 34) { // Battery percentage
             var battery = System.getSystemStats().battery;
@@ -2202,26 +2326,7 @@ class Segment34View extends WatchUi.WatchFace {
         } else if(complicationType == 56) { // Millitary Date Time Group
             val = getDateTimeGroup();
         } else if(complicationType == 57) { // Time of the next Calendar Event
-            if (hasComplications) {
-                try {
-                    var complication = Complications.getComplication(new Id(Complications.COMPLICATION_TYPE_CALENDAR_EVENTS));
-                    var colon_index = null;
-                    if (complication != null && complication.value != null) {
-                        val = complication.value;
-                        colon_index = val.find(":");
-                        if (colon_index != null && colon_index < 2) {
-                            val = "0" + val;
-                        }
-                    } else {
-                        val = "--:--";
-                    }
-                    if (width < 5 and colon_index != null) {
-                        val = val.substring(0, 2) + val.substring(3, 5);
-                    }
-                } catch(e) {
-                    // Complication not found
-                }
-            }
+             // Handled by cache
         } else if(complicationType == 58) { // Active / Total calories
             var rest_calories = getRestCalories();
             var total_calories = 0;
@@ -2233,23 +2338,12 @@ class Segment34View extends WatchUi.WatchFace {
             active_calories = (active_calories > 0) ? active_calories : 0; // Ensure active calories is not negative
             val = active_calories.format(numberFormat) + "/" + total_calories.format(numberFormat);
         } else if(complicationType == 59) { // PulseOx
-            if (hasComplications) {
-                try {
-                    var complication = Complications.getComplication(new Id(Complications.COMPLICATION_TYPE_PULSE_OX));
-                    if (complication != null && complication.value != null) {
-                        val = complication.value.format(numberFormat);
-                    }
-                } catch(e) {
-                    // Complication not found
-                }
-            } else {
-                if ((Toybox has :SensorHistory) and (Toybox.SensorHistory has :getOxygenSaturationHistory)) {
-                    var it = Toybox.SensorHistory.getOxygenSaturationHistory({:period => 1});
-                    if (it != null) {
-                        var ox = it.next();
-                        if(ox != null and ox.data != null) {
-                            val = ox.data.format("%d");
-                        }
+            if ((Toybox has :SensorHistory) and (Toybox.SensorHistory has :getOxygenSaturationHistory)) {
+                var it = Toybox.SensorHistory.getOxygenSaturationHistory({:period => 1});
+                if (it != null) {
+                    var ox = it.next();
+                    if(ox != null and ox.data != null) {
+                        val = ox.data.format("%d");
                     }
                 }
             }
@@ -2260,7 +2354,6 @@ class Segment34View extends WatchUi.WatchFace {
             } else {
                 val = Application.loadResource(Rez.Strings.LABEL_POS_NA);
             }
-            
         } else if(complicationType == 61) { // Location Millitary format
             var pos = Activity.getActivityInfo().currentLocation;
             if(pos != null) {
@@ -2268,7 +2361,6 @@ class Segment34View extends WatchUi.WatchFace {
             } else {
                 val = Application.loadResource(Rez.Strings.LABEL_POS_NA);
             }
-            
         } else if(complicationType == 62) { // Location Accuracy
             var acc = Activity.getActivityInfo().currentLocationAccuracy;
             if(acc != null) {
